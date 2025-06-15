@@ -1,0 +1,62 @@
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+
+# --- Load your data ---
+# Replace these with actual file paths or DataFrame creation
+# df = pd.read_csv("your_data.csv")
+# rulebook = pd.read_csv("your_rulebook.csv")
+
+# Sample data for demonstration (remove if loading real data)
+df = pd.DataFrame({
+    'business_name': ['Acme Corp', 'Beta Inc'],
+    'field_name': ['Revenue', 'Customer Count'],
+    'business_description': ['Annual revenue in USD', 'Number of active users']
+})
+
+rulebook = pd.DataFrame({
+    'Description': ['Total revenue', 'Count of customers'],
+    'Example': ['Example: $1M/year', 'Example: 10,000 users'],
+    'Data Element': ['Revenue', 'Customer_Count'],
+    'Data Treatment': ['Currency', 'Integer']
+})
+
+# --- Fill missing values and combine fields ---
+for col in ['business_name', 'field_name', 'business_description']:
+    df[col] = df[col].fillna('').astype(str)
+
+for col in ['Description', 'Example']:
+    rulebook[col] = rulebook[col].fillna('').astype(str)
+
+df['combined'] = df['business_name'] + ' ' + df['field_name'] + ' ' + df['business_description']
+rulebook['combined'] = rulebook['Description'] + ' ' + rulebook['Example']
+
+# --- Vectorize text using TF-IDF ---
+all_text = df['combined'].tolist() + rulebook['combined'].tolist()
+vectorizer = TfidfVectorizer()
+vectorizer.fit(all_text)
+
+df_vectors = vectorizer.transform(df['combined'])
+rulebook_vectors = vectorizer.transform(rulebook['combined'])
+
+# --- Compute cosine similarity and find best match ---
+similarities = cosine_similarity(df_vectors, rulebook_vectors)
+best_match_indices = similarities.argmax(axis=1)
+df['matched_data_element'] = [rulebook.loc[i, 'Data Element'] for i in best_match_indices]
+df['matched_data_treatment'] = [rulebook.loc[i, 'Data Treatment'] for i in best_match_indices]
+df['match_score'] = similarities.max(axis=1)
+
+# --- Optional: Top 3 matches per row ---
+top_n = 3
+top_indices = np.argsort(similarities, axis=1)[:, -top_n:][:, ::-1]
+
+top_matches = []
+for i, indices in enumerate(top_indices):
+    matches = rulebook.loc[indices, ['Data Element', 'Data Treatment']].to_dict('records')
+    top_matches.append(matches)
+
+df['top_3_matches'] = top_matches
+
+# --- Result ---
+print(df[['business_name', 'matched_data_element', 'matched_data_treatment', 'match_score', 'top_3_matches']])
