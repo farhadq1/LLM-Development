@@ -1,82 +1,49 @@
-import string
-import nltk
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
-import pandas as pd
+def combined_tfidf_match(data_row, rulebook_df, field_weight=0.6, business_name_weight=0.2, description_weight=0.2, threshold=0.6):
+    """
+    Combines TF-IDF scores from field name, business name, and description to find the best match.
 
-nltk.download('stopwords')
-nltk.download('wordnet')
+    Args:
+        data_row: A row from the data_df DataFrame.
+        rulebook_df: The rulebook DataFrame.
+        field_weight: Weight for the field name TF-IDF score.
+        business_name_weight: Weight for the business name TF-IDF score.
+        description_weight: Weight for the description TF-IDF score.
+        threshold: Minimum combined TF-IDF score to consider a match.
 
-stop_words = set(stopwords.words('english'))
-lemmatizer = WordNetLemmatizer()
+    Returns:
+        The best matching rulebook element name, or None if no match exceeds the threshold.
+    """
 
-def clean_text(text):
-    text = text.lower()
-    text = text.translate(str.maketrans('', '', string.punctuation))
-    text = ' '.join([word for word in text.split() if word not in stop_words])
-    text = ' '.join([lemmatizer.lemmatize(word) for word in text.split()])
-    return text
-def clean_and_split_field_name(field_name):
-    """Splits underscore-separated field names and cleans each part."""
-    parts = field_name.split('_')
-    cleaned_parts = [clean_text(part) for part in parts]
-    return ' '.join(cleaned_parts)  # Join back with spaces
-
-rulebook_df['element_cleaned'] = rulebook_df['element_name'].apply(clean_text)
-data_df['field_cleaned'] = data_df['field_name'].apply(clean_text)
-data_df['business_name_cleaned'] = data_df['business_name'].apply(clean_text)
-data_df['description_cleaned'] = data_df['business_description'].apply(clean_text)
-
-def exact_match(data_row, rulebook_df, data_column):
-    matches = rulebook_df[rulebook_df['element_cleaned'] == data_row[data_column]]
-    if not matches.empty:
-        return matches['element_name'].tolist()  # Return list of matched element names
-    return None
-
-data_df['field_match_exact'] = data_df.apply(lambda row: exact_match(row, rulebook_df, 'field_cleaned'), axis=1)
-data_df['business_name_match_exact'] = data_df.apply(lambda row: exact_match(row, rulebook_df, 'business_name_cleaned'), axis=1)
-data_df['description_match_exact'] = data_df.apply(lambda row: exact_match(row, rulebook_df, 'description_cleaned'), axis=1)
-
-from fuzzywuzzy import fuzz
-from fuzzywuzzy import process
-
-def fuzzy_match(data_row, rulebook_df, data_column, threshold=80):  # Adjust threshold as needed
-    best_match, score = process.extractOne(data_row[data_column], rulebook_df['element_cleaned'].tolist(), scorer=fuzz.ratio)
-    if score >= threshold:
-        return rulebook_df[rulebook_df['element_cleaned'] == best_match]['element_name'].tolist()
-    return None
-
-data_df['field_match_fuzzy'] = data_df.apply(lambda row: fuzzy_match(row, rulebook_df, 'field_cleaned'), axis=1)
-data_df['business_name_match_fuzzy'] = data_df.apply(lambda row: fuzzy_match(row, rulebook_df, 'business_name_cleaned'), axis=1)
-data_df['description_match_fuzzy'] = data_df.apply(lambda row: fuzzy_match(row, rulebook_df, 'description_cleaned'), axis=1)
-
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-
-def tfidf_match(data_row, rulebook_df, data_column, threshold=0.7): #Adjust threshold
     vectorizer = TfidfVectorizer()
-    tfidf_matrix = vectorizer.fit_transform(rulebook_df['element_cleaned'].tolist() + [data_row[data_column]])
-    cosine_similarities = cosine_similarity(tfidf_matrix[-1], tfidf_matrix[:-1]).flatten()
-    best_match_index = cosine_similarities.argmax()
 
-    if cosine_similarities[best_match_index] >= threshold:
+    # Combine text for each rulebook element
+    rulebook_combined = rulebook_df['element_cleaned'].tolist()
+
+    # Combine text from the data row
+    data_combined = [data_row['field_cleaned'], data_row['business_name_cleaned'], data_row['description_cleaned']]
+
+    # Fit and transform the combined text
+    tfidf_matrix = vectorizer.fit_transform(rulebook_combined + data_combined)
+
+    # Calculate cosine similarities for each component
+    field_similarities = cosine_similarity(tfidf_matrix[-3], tfidf_matrix[:-3]).flatten()
+    business_name_similarities = cosine_similarity(tfidf_matrix[-2], tfidf_matrix[:-3]).flatten()
+    description_similarities = cosine_similarity(tfidf_matrix[-1], tfidf_matrix[:-3]).flatten()
+
+    # Calculate the weighted combined score
+    combined_scores = (field_weight * field_similarities +
+                       business_name_weight * business_name_similarities +
+                       description_weight * description_similarities)
+
+    best_match_index = combined_scores.argmax()
+    best_match_score = combined_scores[best_match_index]
+
+    if best_match_score >= threshold:
         return rulebook_df.iloc[best_match_index]['element_name']
-    return None
-
-data_df['field_match_tfidf'] = data_df.apply(lambda row: tfidf_match(row, rulebook_df, 'field_cleaned'), axis=1)
-data_df['business_name_match_tfidf'] = data_df.apply(lambda row: tfidf_match(row, rulebook_df, 'business_name_cleaned'), axis=1)
-data_df['description_match_tfidf'] = data_df.apply(lambda row: tfidf_match(row, rulebook_df, 'description_cleaned'), axis=1)
-
-def combine_matches(row):
-    if row['field_match_exact']:
-        return row['field_match_exact']
-    elif row['field_match_fuzzy']:
-        return row['field_match_fuzzy']
-    elif row['field_match_tfidf']:
-        return row['field_match_tfidf']
-    elif row['field_match_keyword']:
-        return row['field_match_keyword']
     else:
-        return "No match found"
+        return None
 
-data_df['final_match'] = data_df.apply(combine_matches, axis=1)
+# Apply the combined matching function
+data_df['best_match'] = data_df.apply(lambda row: combined_tfidf_match(row, rulebook_df), axis=1)
+
+print(data_df[['field_name', 'business_name', 'business_description', 'best_match']])
