@@ -16,6 +16,11 @@ def clean_text(text):
     text = ' '.join([word for word in text.split() if word not in stop_words])
     text = ' '.join([lemmatizer.lemmatize(word) for word in text.split()])
     return text
+def clean_and_split_field_name(field_name):
+    """Splits underscore-separated field names and cleans each part."""
+    parts = field_name.split('_')
+    cleaned_parts = [clean_text(part) for part in parts]
+    return ' '.join(cleaned_parts)  # Join back with spaces
 
 rulebook_df['element_cleaned'] = rulebook_df['element_name'].apply(clean_text)
 data_df['field_cleaned'] = data_df['field_name'].apply(clean_text)
