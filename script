@@ -2,19 +2,20 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-def combined_tfidf_match(data_row, rulebook_df, field_weight=0.5, business_name_weight=0.1, business_description_weight=0.1, high_level_category_weight=0.1, description_weight=0.1, threshold=0.6):
+def combined_tfidf_match(data_row, rulebook_df, field_weight=0.5, business_name_weight=0.1, business_description_weight=0.1, high_level_category_weight=0.05, description_weight=0.05, example_weight=0.2, threshold=0.6):
     """
     Combines TF-IDF scores from field name, business name, business description (data_row) and
-    high-level category, description (rulebook_df) to find the best match.
+    high-level category, description, example (rulebook_df) to find the best match.
 
     Args:
         data_row: A row from the data_df DataFrame (containing 'field_cleaned', 'business_name_cleaned', 'business_description_cleaned').
-        rulebook_df: The rulebook DataFrame (containing 'element_cleaned', 'high_level_category_cleaned', 'description_cleaned').
+        rulebook_df: The rulebook DataFrame (containing 'element_cleaned', 'high_level_category_cleaned', 'description_cleaned', 'example_cleaned').
         field_weight: Weight for the field name TF-IDF score.
         business_name_weight: Weight for the business name TF-IDF score.
         business_description_weight: Weight for the business description TF-IDF score.
         high_level_category_weight: Weight for the high-level category TF-IDF score.
         description_weight: Weight for the description TF-IDF score.
+        example_weight: Weight for the example TF-IDF score.
         threshold: Minimum combined TF-IDF score to consider a match.
 
     Returns:
@@ -24,13 +25,13 @@ def combined_tfidf_match(data_row, rulebook_df, field_weight=0.5, business_name_
     vectorizer = TfidfVectorizer()
 
     # Combine text for each rulebook element
-    rulebook_combined = rulebook_df['element_cleaned'].tolist()
+    rulebook_combined = rulebook_df['element_cleaned'].astype(str).tolist()
 
     # Combine text from the data row
     data_combined = [
-        data_row['field_cleaned'],
-        data_row['business_name_cleaned'],
-        data_row['business_description_cleaned']
+        str(data_row['field_cleaned']),
+        str(data_row['business_name_cleaned']),
+        str(data_row['business_description_cleaned'])
     ]
 
     # Fit and transform the combined text
@@ -42,9 +43,13 @@ def combined_tfidf_match(data_row, rulebook_df, field_weight=0.5, business_name_
     business_description_similarities = cosine_similarity(tfidf_matrix[-1], tfidf_matrix[:-3]).flatten()
 
     # Prepare rulebook features for weighted scoring
+    def transform_and_weight(column, weight):
+        return weight * column.astype(str).apply(lambda x: vectorizer.transform([x]).toarray().flatten())
+
     rulebook_features = (
-        high_level_category_weight * rulebook_df['high_level_category_cleaned'].apply(lambda x: vectorizer.transform([x]).toarray().flatten()) +
-        description_weight * rulebook_df['description_cleaned'].apply(lambda x: vectorizer.transform([x]).toarray().flatten())
+        transform_and_weight(rulebook_df['high_level_category_cleaned'], high_level_category_weight) +
+        transform_and_weight(rulebook_df['description_cleaned'], description_weight) +
+        transform_and_weight(rulebook_df['example_cleaned'], example_weight)
     )
 
     # Calculate the weighted combined score
