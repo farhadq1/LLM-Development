@@ -74,4 +74,137 @@ def combined_tfidf_match(data_row, rulebook_df, field_weight=0.5, business_name_
 # Apply the combined matching function
 data_df['best_match'] = data_df.apply(lambda row: combined_tfidf_match(row, rulebook_df), axis=1)
 
-print(data_df[['field_name', 'business_name', 'business_description', 'best_match']])
+
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+
+# --- 1. Preprocessing and TF-IDF Setup (Run once before applying to data_df) ---
+
+def preprocess_data_for_tfidf(data_df, rulebook_df):
+    """
+    Preprocesses text data and initializes TF-IDF vectorizer and rulebook features.
+    """
+    # Combine all relevant text for fitting the vectorizer
+    all_text = (
+        rulebook_df['element_cleaned'].astype(str).tolist() +
+        rulebook_df['high_level_category_cleaned'].astype(str).tolist() +
+        rulebook_df['description_cleaned'].astype(str).tolist() +
+        rulebook_df['example_cleaned'].astype(str).tolist() +
+        data_df['field_cleaned'].astype(str).tolist() +
+        data_df['business_name_cleaned'].astype(str).tolist() +
+        data_df['business_description_cleaned'].astype(str).tolist()
+    )
+
+    vectorizer = TfidfVectorizer(stop_words='english', ngram_range=(1,2)) # Example: add stop words, n-grams
+    vectorizer.fit(all_text) # Fit the vectorizer on the entire corpus
+
+    # Pre-compute TF-IDF for rulebook elements (element_cleaned)
+    rulebook_elements_tfidf = vectorizer.transform(rulebook_df['element_cleaned'].astype(str).tolist())
+
+    # Pre-compute weighted rulebook features
+    # Helper for pre-computing rulebook feature TF-IDF and weighted sums
+    def get_weighted_rulebook_feature_tfidf(column, weight, vectorizer):
+        transformed_features = vectorizer.transform(column.astype(str).tolist())
+        # Calculate mean TF-IDF score for each document (row)
+        # Using .mean(axis=1) is more efficient for sparse matrices if applicable,
+        # but for individual values, this approach is fine.
+        # For sparse matrices, sum/count of non-zero elements is more robust than direct mean.
+        # Here, we're assuming dense array for simplicity as per original.
+        return weight * np.array([np.mean(vec.toarray()) if vec.nnz > 0 else 0 for vec in transformed_features])
+
+    rulebook_features_precomputed = (
+        get_weighted_rulebook_feature_tfidf(rulebook_df['high_level_category_cleaned'], 0.05, vectorizer) +
+        get_weighted_rulebook_feature_tfidf(rulebook_df['description_cleaned'], 0.05, vectorizer) +
+        get_weighted_rulebook_feature_tfidf(rulebook_df['example_cleaned'], 0.2, vectorizer)
+    )
+
+    return vectorizer, rulebook_elements_tfidf, rulebook_features_precomputed
+
+# --- 2. Improved Matching Function ---
+
+def combined_tfidf_match_optimized(
+    data_row,
+    vectorizer,
+    rulebook_elements_tfidf,
+    rulebook_features_precomputed,
+    rulebook_element_names, # Pass element names for lookup
+    field_weight=0.5,
+    business_name_weight=0.1,
+    business_description_weight=0.1,
+    threshold=0.6
+):
+    """
+    Combines TF-IDF scores using pre-computed rulebook features for efficiency.
+
+    Args:
+        data_row: A row from the data_df DataFrame.
+        vectorizer: The pre-fitted TfidfVectorizer.
+        rulebook_elements_tfidf: Pre-computed TF-IDF matrix for rulebook element names.
+        rulebook_features_precomputed: Pre-computed and weighted rulebook feature scores.
+        rulebook_element_names: List/Series of rulebook element names for return value.
+        # ... (weights and threshold)
+    """
+
+    # Transform data row components using the pre-fitted vectorizer
+    field_tfidf = vectorizer.transform([str(data_row['field_cleaned'])])
+    business_name_tfidf = vectorizer.transform([str(data_row['business_name_cleaned'])])
+    business_description_tfidf = vectorizer.transform([str(data_row['business_description_cleaned'])])
+
+    # Calculate cosine similarities
+    field_similarities = cosine_similarity(field_tfidf, rulebook_elements_tfidf).flatten()
+    business_name_similarities = cosine_similarity(business_name_tfidf, rulebook_elements_tfidf).flatten()
+    business_description_similarities = cosine_similarity(business_description_tfidf, rulebook_elements_tfidf).flatten()
+
+    # Calculate the weighted combined score
+    combined_scores = (
+        field_weight * field_similarities +
+        business_name_weight * business_name_similarities +
+        business_description_weight * business_description_similarities
+    )
+
+    # Add the pre-computed weighted rulebook features
+    combined_scores += rulebook_features_precomputed
+
+    best_match_index = combined_scores.argmax()
+    best_match_score = combined_scores[best_match_index]
+
+    if best_match_score >= threshold:
+        return rulebook_element_names[best_match_index]
+    else:
+        return None
+
+# --- Example Usage ---
+
+# Assuming data_df and rulebook_df are already loaded and cleaned
+# Example dummy data for demonstration:
+data = {'field_cleaned': ['customer name', 'product category', 'transaction date'],
+        'business_name_cleaned': ['ABC Corp', 'XYZ Inc', 'PQR Ltd'],
+        'business_description_cleaned': ['sells software', 'e-commerce platform', 'financial services']}
+data_df = pd.DataFrame(data)
+
+rule_data = {'element_name': ['Client_ID', 'Item_Category', 'Date_of_Sale'],
+             'element_cleaned': ['client identifier', 'product group', 'sales date'],
+             'high_level_category_cleaned': ['Customer Data', 'Product Data', 'Financial Data'],
+             'description_cleaned': ['Unique ID for customer', 'Grouping of products', 'When sale occurred'],
+             'example_cleaned': ['C001, John Doe', 'Electronics, Books', '2023-01-15, 01/01/2023']}
+rulebook_df = pd.DataFrame(rule_data)
+
+# Step 1: Preprocess and get pre-computed values
+vectorizer, rulebook_elements_tfidf, rulebook_features_precomputed = preprocess_data_for_tfidf(data_df, rulebook_df)
+rulebook_element_names = rulebook_df['element_name'].tolist() # Get this once
+
+# Step 2: Apply the optimized matching function
+data_df['best_match'] = data_df.apply(
+    lambda row: combined_tfidf_match_optimized(
+        row,
+        vectorizer,
+        rulebook_elements_tfidf,
+        rulebook_features_precomputed,
+        rulebook_element_names # Pass the element names here
+    ),
+    axis=1
+)
+
+print(data_df)
