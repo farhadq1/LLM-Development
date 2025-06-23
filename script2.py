@@ -25,16 +25,17 @@ def check_single_match(derisking_name_full, derisking_name_lower, target_text_or
             return True
     return False
 
-# --- 2. Sample DataFrames (as before) ---
+# --- 2. Sample DataFrames (ADDED 'Category' to derisking_df) ---
 derisking_data = {
-    'Name': ['Cust', 'OrderDate', 'amount', 'region', 'ID', 'Sales', 'prod_id', 'Name', 'Employee_ID', 'Project Name', 'Account No', 'DAS Internal Account Number', 'Description']
+    'Name': ['Cust', 'OrderDate', 'amount', 'region', 'ID', 'Sales', 'prod_id', 'Name', 'Employee_ID', 'Project Name', 'Account No', 'DAS Internal Account Number', 'Description'],
+    'Category': ['Customer_Info', 'Financial_Data', 'Financial_Data', 'Geographic_Data', 'Identifier_Data', 'Financial_Data', 'Product_Data', 'General_Info', 'HR_Data', 'Project_Data', 'Financial_Data', 'Financial_Data', 'General_Info'] # New Category column
 }
 derisking_df = pd.DataFrame(derisking_data)
 
 target_data = {
-    'columnsname': ['Customer ID', 'Order Date Field', 'Sales Amount', 'Project Name', 'Product_Identifier', 'Employee Staffing', 'Staff Name', 'Office Location', 'Cust', 'Customer Account', 'Account Number', 'Paramount Pictures', 'Sales'], # Added 'Sales' to BusinessName to test exact match
-    'BusinessName': ['Customer Data', 'Sales Metrics', 'Geo Analytics', 'Project Management', 'Inventory Items', 'HR Management', 'Employee Relations', 'Facility Management', 'Customer Data', 'Finance Data', 'Financial Records', 'Film Studio', 'Sales'], # Added 'Sales' here
-    'TargetID': range(1, 14) # Adjusted range
+    'columnsname': ['Customer ID', 'Order Date Field', 'Sales Amount', 'Project Name', 'Product_Identifier', 'Employee Staffing', 'Staff Name', 'Office Location', 'Cust', 'Customer Account', 'Account Number', 'Paramount Pictures', 'Sales'],
+    'BusinessName': ['Customer Data', 'Sales Metrics', 'Geo Analytics', 'Project Management', 'Inventory Items', 'HR Management', 'Employee Relations', 'Facility Management', 'Customer Data', 'Finance Data', 'Financial Records', 'Film Studio', 'Sales'],
+    'TargetID': range(1, 14)
 }
 target_df = pd.DataFrame(target_data)
 
@@ -50,6 +51,9 @@ filtered_derisking_names_data = derisking_df[
 filtered_derisking_names_data['keywordlower'] = filtered_derisking_names_data['Name'].str.lower()
 filtered_derisking_names_data['matchlength'] = filtered_derisking_names_data['Name'].str.len()
 
+# Add the 'Category' to the pre-processed data as well for easy lookup later
+filtered_derisking_names_data['Category'] = derisking_df['Category'] 
+
 all_derisking_names_lower_set = set(filtered_derisking_names_data['keywordlower'])
 
 print("--- Filtered Derisking Data for Matching (Pre-processed) ---")
@@ -64,21 +68,15 @@ def process_dax_match_logic_for_row(target_row, derisking_data_for_match, derisk
     ColumnNameLower = str(current_column_name_original).lower() if pd.notna(current_column_name_original) else ""
     BusinessNameLower = str(current_business_name_original).lower() if pd.notna(current_business_name_original) else ""
 
-    # --- ENHANCED EXACT MATCH LOGIC ---
-    # Combine checks for exact match on both ColumnNameLower and BusinessNameLower
     exact_match_derisking_name = np.nan 
 
-    # Check for exact match with ColumnNameLower
     if ColumnNameLower in derisking_lower_set:
         matched_derisking_row = derisking_data_for_match[
             derisking_data_for_match['keywordlower'] == ColumnNameLower
         ]
         if not matched_derisking_row.empty:
             exact_match_derisking_name = matched_derisking_row['Name'].iloc[0]
-            # If an exact match is found here, we can prioritize it immediately.
-            # No need to check BusinessNameLower if ColumnNameLower already provided a top match.
     
-    # If no exact match on ColumnNameLower, check for exact match on BusinessNameLower
     if pd.isna(exact_match_derisking_name) and BusinessNameLower in derisking_lower_set:
         matched_derisking_row = derisking_data_for_match[
             derisking_data_for_match['keywordlower'] == BusinessNameLower
@@ -86,8 +84,6 @@ def process_dax_match_logic_for_row(target_row, derisking_data_for_match, derisk
         if not matched_derisking_row.empty:
             exact_match_derisking_name = matched_derisking_row['Name'].iloc[0]
 
-
-    # --- Remaining logic for partial matches (unchanged) ---
     all_valid_derisking_matches_for_this_row = []
 
     for idx, derisking_row in derisking_data_for_match.iterrows():
@@ -114,22 +110,55 @@ def process_dax_match_logic_for_row(target_row, derisking_data_for_match, derisk
         if ("employee" in ColumnNameLower) or ("staff" in ColumnNameLower):
             triggered_partial_match_result = 'Partialmatch: Employee'
 
-    # --- Final result based on precedence ---
+    # --- Determine the final matched Derisking Name ---
     final_matched_derisking_name = np.nan
 
-    if pd.notna(exact_match_derisking_name): # Now uses the combined exact match
+    if pd.notna(exact_match_derisking_name):
         final_matched_derisking_name = exact_match_derisking_name
     elif pd.notna(triggered_partial_match_result):
         final_matched_derisking_name = triggered_partial_match_result
     elif pd.notna(matched_derisking_keyword_from_partial):
         final_matched_derisking_name = matched_derisking_keyword_from_partial
 
+    # --- NEW LOGIC: Look up the additional field (e.g., 'Category') ---
+    final_matched_derisking_category = np.nan # Initialize new field to NaN
+
+    # We need to find the 'Name' from the derisking_df that led to the match,
+    # regardless of whether the final output is a literal string ('Partialmatch: Employee')
+    # or the actual Derisking Name.
+    
+    lookup_name_for_category = np.nan # This variable will hold the derisking_df['Name'] to look up
+
+    if pd.notna(exact_match_derisking_name):
+        # If an exact match was found, use that name for lookup
+        lookup_name_for_category = exact_match_derisking_name
+    elif pd.notna(matched_derisking_keyword_from_partial):
+        # If a partial match (including the one that triggers 'Partialmatch: Employee') was found,
+        # use that underlying derisking keyword's name for lookup.
+        # This handles cases where 'Name' is the keyword, even if the final result is a status string.
+        lookup_name_for_category = matched_derisking_keyword_from_partial
+    
+    # Perform the lookup for the Category if a valid name to look up was identified
+    if pd.notna(lookup_name_for_category):
+        lookup_keyword_lower = str(lookup_name_for_category).lower()
+        
+        # Find the row in derisking_data_for_match corresponding to this lowercased keyword
+        category_row = derisking_data_for_match[
+            derisking_data_for_match['keywordlower'] == lookup_keyword_lower
+        ]
+        
+        if not category_row.empty:
+            # Retrieve the 'Category' value from the matched row
+            final_matched_derisking_category = category_row['Category'].iloc[0]
+
+    # Return both the matched name and the new field
     return pd.Series({
-        'Matched_Derisking_Name': final_matched_derisking_name
+        'Matched_Derisking_Name': final_matched_derisking_name,
+        'Matched_Derisking_Category': final_matched_derisking_category
     })
 
 # --- 5. Apply the logic to each row of the target DataFrame ---
-print("\n--- Applying DAX-like matching logic to Target DataFrame (with ENHANCED Exact Match) ---")
+print("\n--- Applying DAX-like matching logic to Target DataFrame (with new 'Category' field) ---")
 new_column_results = target_df.apply(
     lambda row: process_dax_match_logic_for_row(row, filtered_derisking_names_data, all_derisking_names_lower_set),
     axis=1
@@ -138,6 +167,6 @@ new_column_results = target_df.apply(
 # --- 6. Concatenate the new column back to the original target DataFrame ---
 final_target_df_with_matched_names = pd.concat([target_df, new_column_results], axis=1)
 
-print("\n--- Final Target DataFrame with Matched Derisking Names ---")
+print("\n--- Final Target DataFrame with Matched Derisking Names and Category ---")
 print(final_target_df_with_matched_names)
 print("-" * 30)
