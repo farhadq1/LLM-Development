@@ -1,70 +1,101 @@
 import pandas as pd
 import numpy as np
 
-def get_dtr_element_by_combination_with_fallback(df):
-    """
-    This function processes a DataFrame to pick the appropriate 'element name'
-    for each unique combination of 'field name' and 'business name'.
-    It prioritizes non-blank and non-'No DTR' element names.
-    If no such valid element is found for a combination, it falls back to 'No DTR'.
+# --- 1. Sample DataFrames (Modified target_df with 'Target_Category') ---
+target_data = {
+    'columnsname': ['Customer ID', 'Order Date Field', 'Sales Amount', 'Project Name', 'Product_Identifier', 'Employee Staffing', 'Staff Name', 'Office Location', 'Cust', 'Customer Account', 'Account Number', 'Paramount Pictures', 'Sales'],
+    'BusinessName': ['Customer Data', 'Sales Metrics', 'Geo Analytics', 'Project Management', 'Inventory Items', 'HR Management', 'Employee Relations', 'Facility Management', 'Customer Data', 'Finance Data', 'Financial Records', 'Film Studio', 'Sales'],
+    'TargetID': range(1, 14),
+    # --- NEW: Assuming a 'Target_Category' column in target_df ---
+    'Target_Category': [
+        'Customer_Info', 'Financial_Info', 'Financial_Info', 'Project_Info', 'Product_Info',
+        'HR_Info', 'HR_Info', 'Geographic_Info', 'Customer_Info', 'Financial_Info',
+        'Financial_Info', 'General_Info', 'Financial_Info'
+    ]
+}
+target_df = pd.DataFrame(target_data)
 
-    Args:
-        df (pd.DataFrame): The input DataFrame with columns
-                           'field name', 'business name', and 'element name'.
+# --- Rulebook DataFrame ---
+rulebook_data = {
+    'Data Category': ['Financial_Info', 'Customer_Info', 'HR_Info', 'Product_Info', 'Geographic_Info', 'Financial_Info', 'Project_Info'],
+    'Rulebook Element': ['Amount', 'Customer', 'Employee', 'ID', 'Region', 'Account', 'Project Name']
+}
+rulebook_df = pd.DataFrame(rulebook_data)
 
-    Returns:
-        pd.DataFrame: The DataFrame with an additional column 'selected_dtr_element'
-                      containing the chosen element name for each combination.
-                      It will be 'No DTR' if no valid element is found.
-    """
-    # Create a new column to store the selected DTR element, initialized to NaN
-    df['selected_dtr_element'] = np.nan
 
-    # Define the logic for selecting an element within each group
-    def select_element_for_group(group):
-        # 1. Try to find an element that is NOT blank and NOT 'No DTR'
-        valid_elements_in_group = group[
-            group['element name'].notna() & (group['element name'] != 'No DTR')
-        ]['element name']
+print("--- Original DataFrames ---")
+print("\nTarget_df:\n", target_df)
+print("\nRulebook_df:\n", rulebook_df)
+print("-" * 30)
 
-        if not valid_elements_in_group.empty:
-            # If valid elements exist, pick the first one
-            return valid_elements_in_group.iloc[0]
-        else:
-            # 2. If no valid elements are found, fall back to 'No DTR'
-            return 'No DTR'
+# --- 2. Pre-process Rulebook for efficiency ---
+rulebook_df['data_category_lower'] = rulebook_df['Data Category'].str.lower()
+rulebook_df['rulebook_element_lower'] = rulebook_df['Rulebook Element'].str.lower()
+rulebook_df['rulebook_element_length'] = rulebook_df['Rulebook Element'].str.len()
 
-    # Apply the selection logic to each group formed by 'field name' and 'business name'
-    # The result of apply will be a Series aligned with the original DataFrame's index,
-    # which allows direct assignment.
-    df['selected_dtr_element'] = df.groupby(['field name', 'business name'], group_keys=False).apply(select_element_for_group)
 
-    return df
+print("\n--- Pre-processed Rulebook Data ---")
+print(rulebook_df)
+print("-" * 30)
 
-if __name__ == '__main__':
-    # Sample DataFrame for demonstration based on your clarification
-    data = {
-        'field name': ['change type', 'ETL', 'load date', 'Load Date', 'ETL', 'ytd cap', 'year to date cap', 'zldo', 'Zero Trailer Rate Indicator', 'A', 'A', 'B', 'B', 'C', 'C', 'D', 'D'],
-        'business name': ['ETL', 'change type', 'Load Date', 'ETL', 'load date', 'year to date cap', 'ytd cap', 'Zero Trailer Rate Indicator', 'zldo', 'X', 'X', 'Y', 'Y', 'Z', 'Z', 'W', 'W'],
-        'element name': ['change type', 'No DTR', 'load date', 'ETL', 'ETL', 'No DTR', 'No DTR', 'No DTR', 'No DTR', 'DTR1', 'No DTR', 'No DTR', 'DTR2', '', 'DTR3', np.nan, 'No DTR']
-    }
-    df = pd.DataFrame(data)
 
-    print("Original DataFrame:")
-    print(df)
-    print("\n" + "="*50 + "\n")
+# --- 3. Modified process_rulebook_match_for_row function ---
+def process_rulebook_match_for_row(target_row, rulebook_data_processed):
+    # Get target category, converted to lower for case-insensitive matching
+    target_category_lower = str(target_row['Target_Category']).lower() \
+                            if pd.notna(target_row['Target_Category']) else ""
 
-    # Apply the function
-    df_processed = get_dtr_element_by_combination_with_fallback(df.copy()) # Use .copy() to avoid modifying the original DataFrame
+    current_column_name_original = target_row['columnsname']
+    current_business_name_original = target_row['BusinessName']
+    
+    ColumnNameLower = str(current_column_name_original).lower() if pd.notna(current_column_name_original) else ""
+    BusinessNameLower = str(current_business_name_original).lower() if pd.notna(current_business_name_original) else ""
 
-    print("Processed DataFrame:")
-    print(df_processed)
+    final_matched_rulebook_element = np.nan # Initialize output to NaN
+    
+    # List to store all rulebook elements that match for the current target row
+    # Stores (Rulebook Element full string, its length)
+    possible_rulebook_matches = [] 
 
-    print("\n" + "="*50 + "\n")
-    print("Explanation of specific rows in the processed output:")
-    print("- Rows for ('change type', 'ETL') and ('load date', 'Load Date') pick the specific DTR because they are valid.")
-    print("- Rows for ('ETL', 'change type'), ('ytd cap', 'year to date cap'), ('zldo', 'Zero Trailer Rate Indicator'), etc., all resolve to 'No DTR' because for their respective combinations, no valid DTR (i.e., not blank and not 'No DTR') was found. For example, the ('ETL', 'change type') combination only has 'No DTR', so 'No DTR' is picked.")
-    print("- For ('A', 'X'): 'DTR1' is picked because it's a valid DTR. 'No DTR' is ignored because a valid one exists.")
-    print("- For ('B', 'Y'): 'DTR2' is picked because it's a valid DTR.")
-    print("- For ('C', 'Z'): 'DTR3' is picked because it's a valid DTR. The blank element '' is ignored.")
-    print("- For ('D', 'W'): Both elements are NaN and 'No DTR'. Since no valid DTR exists, 'No DTR' is picked as the fallback.")
+    for idx, rule_row in rulebook_data_processed.iterrows():
+        rule_category_lower = rule_row['data_category_lower'] # Rulebook's category (lowercased)
+        rule_element_lower = rule_row['rulebook_element_lower'] # Rulebook's element (lowercased)
+        rule_element_full = rule_row['Rulebook Element'] # Original casing for output
+        rule_element_length = rule_row['rulebook_element_length']
+
+        # --- First Check: Does the target's category match the rulebook's Data Category? ---
+        if target_category_lower == rule_category_lower:
+            # --- Only if categories match, proceed to check for string containment ---
+            if (rule_element_lower in ColumnNameLower) or \
+               (rule_element_lower in BusinessNameLower):
+                possible_rulebook_matches.append((rule_element_full, rule_element_length))
+    
+    # If any rulebook elements matched based on both conditions, select the "best" one
+    if possible_rulebook_matches:
+        # Sort by element length (descending) then by element name (descending) for ties
+        best_rulebook_match_info = sorted(
+            possible_rulebook_matches,
+            key=lambda x: (x[1], x[0]), 
+            reverse=True 
+        )[0] # Get the first element (the best match) from the sorted list
+        
+        final_matched_rulebook_element = best_rulebook_match_info[0] # The matched Rulebook Element
+
+    # Return only the matched rulebook element
+    return pd.Series({
+        'Matched_Rulebook_Element': final_matched_rulebook_element
+    })
+
+# --- 4. Apply the logic to each row of the target DataFrame ---
+print("\n--- Applying Rulebook matching logic to Target DataFrame (with category check) ---")
+new_column_results = target_df.apply(
+    lambda row: process_rulebook_match_for_row(row, rulebook_df), 
+    axis=1
+)
+
+# --- 5. Concatenate the new columns back to the original target DataFrame ---
+final_target_df_with_matched_rules = pd.concat([target_df, new_column_results], axis=1)
+
+print("\n--- Final Target DataFrame with Matched Rulebook Element ---")
+print(final_target_df_with_matched_rules)
+print("-" * 30)
